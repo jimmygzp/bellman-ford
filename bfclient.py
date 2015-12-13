@@ -6,63 +6,27 @@ from collections import defaultdict
 import cPickle as pickle
 import datetime
 import copy
-
+DEBUG = 0
+DEBUG2 = 0
 ## LISTS TO KEEP:
 ## LIST OF NEIGHBORS, VALUE = [ip_addr, port]
-
-'''
-global neighbors 
-
-neighbors = []
-'''
+BUFFER_SIZE = 4096
 ## DICTS TO KEEP:
-## DICT OF COSTS, KEY = [ip_addr, port], VALUE = cost (int)
+## DICT OF INITIAL LINK COSTS, KEY = [ip_addr, port], VALUE = cost (int)
 costs = {}
 ## DICT OF LAST_CONTACT = [ip_addr, port], VALUE = timestamp
 last_contact = {}
-
 ## DICT OF UPLINK, KEY = [ip_addr, port], VALUE = 1 for true, 0 for false
-uplink = {}##defaultdict(int)
-
+uplink = {}
 ## DICT OF DISTANCE VECTORS, KEY = DESTINATION [ip_addr, port], VALUE = [link[ip_addr, port], cost (int)]
 dv = {}
-BUFFER_SIZE = 4096
-
 me = (0,0)
-
-DEBUG = 1
-
-DEBUG2 = 0
-
 last_broadcast = time()
-
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 sock.setblocking(0)
-
 my_addr = socket.gethostbyname(socket.gethostname())
-
-
 MAX_COST = float("inf")
-
-## PSEUDOCODE:
-## WHILE TRUE:
-##		FOR NEIGHBOR IN NEIGHBORS: (IF UPLINK)
-## 			IF NEIGHBOR TIMES OUT... MARK DOWNLINK AND LINK UPDATE TO ALL
-##      IF WE NEED TO REBROADCAST (OWN TIMEOUT REACHED), THEN WE BROADCAST
-##		IF WE RECEIVE A MESSAGE IN DGRAM SOCKET:
-##		IF FROM A NEW NEIGHBOR:
-##				THEN ADD NEW NEIGHBOR, BROADCAST COSTS
-##		IF WE RECEIVE A NEW MESSAGE, THEN WE UPDATE OUR COSTS AND BROADCAST
-##		IF WE RECEIVED KEYBOARD COMMAND, HANDLE THAT
-##			IF LINKDOWN:
-##				MARK DOWNLINK, REBROADCAST COSTS
-##			ELIF LINKUP:
-##				MARK LINKUP:
-##			ELIF SHOWRT:
-##				SHOW ROUTE
-##			ELIF CLOSE:
-##				SHUTDOWN
 
 def kill_link(client):
 
@@ -93,7 +57,6 @@ def add_neighbor_new(client, vector):
 	## 2. update dv graph accordingly
 	##neighbors.append(client)
 
-
 	dv[client] = vector ## add another member to dv
 	dv[me][client] = [client, dv[client][me][1]]
 	costs[client] = float(dv[client][me][1])
@@ -104,11 +67,10 @@ def add_neighbor_new(client, vector):
 def broadcast():
 	## for all current connections with uplink:
 		## send our dv
-	
+	if DEBUG:
+		print dv[me]
 
-	print dv[me]
-
-	print uplink
+		print uplink
 
 	##global neighbors
 	for neighbor, vector in dv.iteritems():
@@ -127,9 +89,9 @@ def broadcast():
 					if path[0] == neighbor and dest != neighbor:
 						##print "dv_poisoned[dest][1] = " + str(dv_poisoned[dest][1])
 						dv_poisoned[dest][1] = MAX_COST
-
-				print "poisoned message to neighbot %s : %s" % (neighbor, dv_poisoned)
-				print "actual dv[me] " + str(dv[me])
+				if DEBUG:
+					print "poisoned message to neighbot %s : %s" % (neighbor, dv_poisoned)
+					print "actual dv[me] " + str(dv[me])
 				sock.sendto(pickle.dumps(dv_poisoned), neighbor)
 	
 	last_broadcast = time()
@@ -163,12 +125,19 @@ def update_dv():
 			try:			
 				if DEBUG:
 					print "^^^^^^^^^^^^^^ TRYING INITIAL CLEANUP"
+					print "dest = " + str(dest)
+					print "cost[0] = " + str(dest)
 					print "dv[me][dest]" + str(dv[me][dest])
-					print "dv[cost[0]]" + str(dv[cost[0]])
-					print "dv[cost[0]][dest] " + str(dv[cost[0]][me][1])
-				dv[me][dest][1] = dv[cost[0]][me][1] + dv[cost[0]][dest][1]
+					print "dv[cost[0]] = " + str(dv[cost[0]])
+					print "dv[cost[0]][me][1] = " + str(dv[cost[0]][me][1])
+					print "dv[cost[0]][dest][1] = " +  str(dv[cost[0]][dest][1])
+					if dv[cost[0]][me][1] + dv[cost[0]][dest][1] > dv[me][dest][1]:
+						dv[me][dest] = [dest, dv[cost[0]][me][1] + dv[cost[0]][dest][1]]
+
+				
 			except:
 				pass
+
 			oldcost = dv[me][dest][1]
 			min_cost= MAX_COST
 			## dv[me][dest] = (link, cost)
@@ -266,6 +235,7 @@ def linkup(client_input):
 	
 	uplink[client] = 1
 	dv[me][client] = [client, costs[client]]
+	dv[client][me] = [me, costs[client]]
 
 	update_dv()
 	broadcast()
@@ -319,27 +289,22 @@ def handle_incoming_message(packet):
 			if update_dv():
 				broadcast()
 
-	
-	## IF sender is not in neighbors, use add_neighbor_new()
-	## then update cost
-
 		if changed:
 			broadcast()
 
 
 def handle_keyboard_message(message):
 	arg = message.split()
-
 	if arg[0].upper() == 'SHOWRT':
 		showroute()
-	elif arg[0].upper() == 'LINKDOWN':
+	elif arg[0].upper() == 'LINKDOWN' and len(arg) == 3:
 		linkdown((arg[1], int(arg[2])))
-	elif arg[0].upper() == 'LINKUP':
+	elif arg[0].upper() == 'LINKUP' and len(arg) == 3:
 		linkup((arg[1], int(arg[2])))
 	elif arg[0].upper() == 'BROADCAST':
 		broadcast()
 	else:
-		print "Syntax error"
+		print "Syntax error. Refer to assignment for correct syntax."
 		pass
 
 def client_parser(argv):
