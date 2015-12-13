@@ -5,6 +5,7 @@ from time import time
 from collections import defaultdict
 import cPickle as pickle
 import datetime
+import copy
 
 ## LISTS TO KEEP:
 ## LIST OF NEIGHBORS, VALUE = [ip_addr, port]
@@ -29,7 +30,7 @@ BUFFER_SIZE = 4096
 
 me = (0,0)
 
-DEBUG = 0
+DEBUG = 1
 
 DEBUG2 = 0
 
@@ -63,21 +64,25 @@ MAX_COST = float("inf")
 ##			ELIF CLOSE:
 ##				SHUTDOWN
 
+def kill_link(client):
+
+	sock.sendto('DOWN', client)
+
 
 def add_neighbor_initial(client, weight):
 	## client = (ip_addr, port)
 	##global neighbors
 	##neighbors.append(client)
-	costs[client] = int(weight)
+	costs[client] = float(weight)
 	last_contact[client]= time()
 	
 	uplink[client] = 1
 
-	dv[me][client] = (client, int(weight)) 
+	dv[me][client] = [client, float(weight)]
 
 	dv[client] = {}
 
-	dv[client][client] = (client, 0) ## must start off by assuming its alive
+	dv[client][client] = [client, 0] ## must start off by assuming its alive
 
 
 def add_neighbor_new(client, vector):
@@ -90,8 +95,8 @@ def add_neighbor_new(client, vector):
 
 
 	dv[client] = vector ## add another member to dv
-	dv[me][client] = (client, dv[client][me][1])
-
+	dv[me][client] = [client, dv[client][me][1]]
+	costs[client] = float(dv[client][me][1])
 
 	## update_dv()
 
@@ -99,9 +104,12 @@ def add_neighbor_new(client, vector):
 def broadcast():
 	## for all current connections with uplink:
 		## send our dv
+	
+
 	print dv[me]
 
 	print uplink
+
 	##global neighbors
 	for neighbor, vector in dv.iteritems():
 		if neighbor is not me:
@@ -111,7 +119,18 @@ def broadcast():
 			if uplink[neighbor]==1:
 				if DEBUG2:
 					print "broadcast: sending to client " + str(neighbor)
-				sock.sendto(pickle.dumps(dv[me]), neighbor)
+				
+				## now we know what the neighbor is. we need to poison the dv
+				dv_poisoned = copy.deepcopy(dv[me])
+
+				for dest, path in dv[me].iteritems():
+					if path[0] == neighbor and dest != neighbor:
+						##print "dv_poisoned[dest][1] = " + str(dv_poisoned[dest][1])
+						dv_poisoned[dest][1] = MAX_COST
+
+				print "poisoned message to neighbot %s : %s" % (neighbor, dv_poisoned)
+				print "actual dv[me] " + str(dv[me])
+				sock.sendto(pickle.dumps(dv_poisoned), neighbor)
 	
 	last_broadcast = time()
 	pass
@@ -137,9 +156,20 @@ def update_dv():
 			if DEBUG:
 				print "----updating distance to dest : " + str (dest)
 				print "----old cost = " + str(cost)
-			
-			oldcost = dv[me][dest][1]
 
+			## KEEP REALITY CHECK; THE COSTS MAY HAVE CHANGE ALREADY
+			## BEFORE FINDING "BEST ROUTE", WE NEED TO KNOW HOW WE ARE REALLY DOING
+
+			try:			
+				if DEBUG:
+					print "^^^^^^^^^^^^^^ TRYING INITIAL CLEANUP"
+					print "dv[me][dest]" + str(dv[me][dest])
+					print "dv[cost[0]]" + str(dv[cost[0]])
+					print "dv[cost[0]][dest] " + str(dv[cost[0]][me][1])
+				dv[me][dest][1] = dv[cost[0]][me][1] + dv[cost[0]][dest][1]
+			except:
+				pass
+			oldcost = dv[me][dest][1]
 			min_cost= MAX_COST
 			## dv[me][dest] = (link, cost)
 			for neighbor, links in dv.iteritems():
@@ -151,7 +181,9 @@ def update_dv():
 					
 					try:
 						neighbor_to_dest = dv[neighbor][dest][1]
+
 					except:
+						
 						neighbor_to_dest = MAX_COST
 					
 					if DEBUG:
@@ -161,11 +193,17 @@ def update_dv():
 						print "-dv[neighbor][dest][1] = " + str(neighbor_to_dest)
 						print "-oldcost = " + str(oldcost)
 
+					## DONT leT IT TO EASY! UPDATE THE OLD PATH FIRST!!
 
-					if dv[me][neighbor][1] + neighbor_to_dest < min_cost:
+					if neighbor != dest:
+						me_to_neighbor = dv[me][neighbor][1]
+					else:
+						me_to_neighbor = costs[neighbor]
+					
+					if me_to_neighbor + neighbor_to_dest < min_cost:
 						if DEBUG:
 							print "-route discovered, dv[%s][%s] + dv[%s][%s] = %s" % (me, neighbor, neighbor, dest, dv[me][neighbor][1]+ neighbor_to_dest)
-						min_cost = dv[me][neighbor][1] + neighbor_to_dest
+						min_cost = me_to_neighbor + neighbor_to_dest
 						path = neighbor
 
 			if oldcost != min_cost:
@@ -177,7 +215,8 @@ def update_dv():
 					print "====via path" + str(path)
 				
 				changed = 1
-				dv[me][dest] = (path, min_cost)
+				dv[me][dest] = [path, min_cost]
+				##costs[dest] = min_cost
 
 			if DEBUG:
 				print "===================================================="
@@ -191,18 +230,31 @@ def linkdown(client_input):  ## also used for timeout event
 		client = (my_addr, client_input[1])
 
 	uplink[client] = 0
-	costs[client] = dv[me][client]
-	dv[me][client] = (("DOWN", 0), MAX_COST)
-	dv[client][me] = (("DOWN", 0), MAX_COST)
+	
+	costs[client] = dv[me][client][1]
+	
+	dv[me][client] = [("DOWN", 0), MAX_COST]
+	dv[client][me] = [("DOWN", 0), MAX_COST]
+	
+
+	## first, the dv is dead to me
 	## any current path that relies on the path must be labeled down as well
 	if DEBUG2:
 		print dv[me]
 
 	for dest, path in dv[me].iteritems():
-		if path[1] is client:
-			dv[me][dest] = (("ALSO DOWN", 0), MAX_COST)
+		if DEBUG:
+			print "****killing intermediary... dest = " + str(dest)
+			print "path[1] = " + str(path[1])
+		if path[1] == client:
+			if DEBUG:
+				print "this path needs to be recalculated..."
+			dv[me][dest] = [("ALSO DOWN", 0), MAX_COST]
 
 	update_dv()
+
+	kill_link(client)
+	
 	broadcast()
 
 def linkup(client_input):
@@ -213,7 +265,7 @@ def linkup(client_input):
 		client = (my_addr, client_input[1])
 	
 	uplink[client] = 1
-	dv[me][client] = costs[client]
+	dv[me][client] = [client, costs[client]]
 
 	update_dv()
 	broadcast()
@@ -221,42 +273,58 @@ def linkup(client_input):
 
 def handle_incoming_message(packet):
 
-	changed = 0
+
 	sender = packet[1]
-	new_dv = pickle.loads(packet[0])
-	last_contact[sender] = time()
+	if packet[0] == 'DOWN':
+		costs[sender] = dv[me][sender][1]
+		dv[me][sender][1] = MAX_COST
+		dv[sender][me][1] = MAX_COST
+		uplink[sender] = 0
+		update_dv()
+		broadcast()
+	
+	else: 
+		
+		changed = 0
+		new_dv = pickle.loads(packet[0])
+		last_contact[sender] = time()
 
-	if sender not in dv.keys():
-		add_neighbor_new(sender, new_dv)
-		uplink[sender] = 1
+		if sender not in dv.keys():## we dont know this dude, but it connected directly! gotta update costs
+			add_neighbor_new(sender, new_dv)
+			uplink[sender] = 1
 
-		for dest, path in dv[sender].iteritems():
-			if dest not in dv[me].keys():
-				dv[me][dest] = (("UNKNOWN", 0), MAX_COST)
+			for dest, path in dv[sender].iteritems():
+				if dest not in dv[me].keys():
+					dv[me][dest] = [("UNKNOWN", 0), MAX_COST]
 
-		## make sure we have a (fresher) start
-		dv[me][sender] = (sender, dv[sender][me][1])
+			costs[sender] = dv[sender][me][1] ## original cost
+			dv[me][sender] = [sender,  costs[sender]]
 
-		if update_dv():
-			broadcast()
+			## make sure we have a (fresher) start
 
-	else:
-		dv[sender] = new_dv
-		for dest, path in dv[sender].iteritems():
-			if dest not in dv[me].keys():
-				dv[me][dest] = (("UNKNOWN", 0), MAX_COST)
+			if update_dv():
+				broadcast()
 
-		uplink[sender] = 1
+		else:## we know this dude... reuse old cost, you say?
+			dv[sender] = new_dv
+			for dest, path in dv[sender].iteritems():
+				if dest not in dv[me].keys():
+					dv[me][dest] = [("UNKNOWN", 0), MAX_COST]
+			
+			if not uplink[sender]: ## did you just come back alive? if so, restore initial connection
+				dv[me][sender] = [sender, costs[sender]]
 
-		if update_dv():
-			broadcast()
+			uplink[sender] = 1
+
+			if update_dv():
+				broadcast()
 
 	
 	## IF sender is not in neighbors, use add_neighbor_new()
 	## then update cost
 
-	if changed:
-		broadcast()
+		if changed:
+			broadcast()
 
 
 def handle_keyboard_message(message):
@@ -311,7 +379,7 @@ if __name__ == "__main__":
 	me = (my_addr, my_port)
 	
 	dv[me] = {}
-	dv[me][me] = ((my_addr, my_port), 0)
+	dv[me][me] = [(my_addr, my_port), 0]
 	uplink[me] = 1
 	
 	if DEBUG:
