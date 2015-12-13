@@ -29,9 +29,7 @@ my_addr = socket.gethostbyname(socket.gethostname())
 MAX_COST = float("inf")
 
 def kill_link(client):
-
 	sock.sendto('DOWN', client)
-
 
 def add_neighbor_initial(client, weight):
 	## client = (ip_addr, port)
@@ -39,15 +37,10 @@ def add_neighbor_initial(client, weight):
 	##neighbors.append(client)
 	costs[client] = float(weight)
 	last_contact[client]= time()
-	
 	uplink[client] = 1
-
 	dv[me][client] = [client, float(weight)]
-
 	dv[client] = {}
-
 	dv[client][client] = [client, 0] ## must start off by assuming its alive
-
 
 def add_neighbor_new(client, vector):
 
@@ -63,15 +56,12 @@ def add_neighbor_new(client, vector):
 
 	## update_dv()
 
-
 def broadcast():
 	## for all current connections with uplink:
 		## send our dv
 	if DEBUG:
 		print dv[me]
-
 		print uplink
-
 	##global neighbors
 	for neighbor, vector in dv.iteritems():
 		if neighbor is not me:
@@ -81,7 +71,6 @@ def broadcast():
 			if uplink[neighbor]==1:
 				if DEBUG2:
 					print "broadcast: sending to client " + str(neighbor)
-				
 				## now we know what the neighbor is. we need to poison the dv
 				dv_poisoned = copy.deepcopy(dv[me])
 
@@ -93,12 +82,10 @@ def broadcast():
 					print "poisoned message to neighbot %s : %s" % (neighbor, dv_poisoned)
 					print "actual dv[me] " + str(dv[me])
 				sock.sendto(pickle.dumps(dv_poisoned), neighbor)
-	
 	last_broadcast = time()
 	pass
 
 def showroute():
-
 	print str(datetime.datetime.now()) + ", Current Distance Vector is:"
 	for dest, path in dv[me].iteritems():
 		if dest is not me:
@@ -109,7 +96,6 @@ def showroute():
 
 
 def update_dv(): 
-
 	path = ("UNREACHABLE", 0)
 	changed = 0
 	
@@ -118,10 +104,8 @@ def update_dv():
 			if DEBUG:
 				print "----updating distance to dest : " + str (dest)
 				print "----old cost = " + str(cost)
-
 			## KEEP REALITY CHECK; THE COSTS MAY HAVE CHANGE ALREADY
 			## BEFORE FINDING "BEST ROUTE", WE NEED TO KNOW HOW WE ARE REALLY DOING
-
 			try:			
 				if DEBUG:
 					print "^^^^^^^^^^^^^^ TRYING INITIAL CLEANUP"
@@ -132,9 +116,7 @@ def update_dv():
 					print "dv[cost[0]][me][1] = " + str(dv[cost[0]][me][1])
 					print "dv[cost[0]][dest][1] = " +  str(dv[cost[0]][dest][1])
 					if dv[cost[0]][me][1] + dv[cost[0]][dest][1] > dv[me][dest][1]:
-						dv[me][dest] = [dest, dv[cost[0]][me][1] + dv[cost[0]][dest][1]]
-
-				
+						dv[me][dest] = [dest, dv[cost[0]][me][1] + dv[cost[0]][dest][1]]	
 			except:
 				pass
 
@@ -146,13 +128,10 @@ def update_dv():
 				if uplink[neighbor] and neighbor != me:
 					if DEBUG:
 						print "-neighbor is not me, neighbor = " + str(neighbor)
-						print "-me: " + str(me)
-					
+						print "-me: " + str(me)				
 					try:
 						neighbor_to_dest = dv[neighbor][dest][1]
-
-					except:
-						
+					except:		
 						neighbor_to_dest = MAX_COST
 					
 					if DEBUG:
