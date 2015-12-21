@@ -1,13 +1,13 @@
 import sys
 import socket
 import select
-from time import time
+from time import time, sleep
 from collections import defaultdict
 import cPickle as pickle
 import datetime
 import copy
-DEBUG = 0
-DEBUG2 = 0
+DEBUG = 1
+DEBUG2 = DEBUG
 ## LISTS TO KEEP:
 ## LIST OF NEIGHBORS, VALUE = [ip_addr, port]
 BUFFER_SIZE = 4096
@@ -25,7 +25,12 @@ last_broadcast = time()
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 sock.setblocking(0)
+
 my_addr = socket.gethostbyname(socket.gethostname())
+
+if my_addr[:3] == '127':
+	my_addr = '127.0.0.1'
+
 MAX_COST = float("inf")
 
 def kill_link(client):
@@ -83,7 +88,7 @@ def broadcast():
 					print "actual dv[me] " + str(dv[me])
 				sock.sendto(pickle.dumps(dv_poisoned), neighbor)
 	last_broadcast = time()
-	pass
+
 
 def showroute():
 	print str(datetime.datetime.now()) + ", Current Distance Vector is:"
@@ -96,6 +101,15 @@ def showroute():
 
 
 def update_dv(): 
+	
+	for dest,cost in dv[me].iteritems():
+		path = cost[0]
+		try:
+			dv[me][dest][1] = dv[me][path][1] + dv[path][dest][1]
+		except:
+			dv[me][dest][1] = MAX_COST
+
+
 	path = ("UNREACHABLE", 0)
 	changed = 0
 	
@@ -168,23 +182,29 @@ def update_dv():
 
 			if DEBUG:
 				print "===================================================="
+	
 	return changed
 
 def linkdown(client_input):  ## also used for timeout event
 	
 
 	client = client_input
-	if client[0] == 'localhost' or client[0] == '127.0.0.1':
+	if client[0] == 'localhost' or client[0][:3] == '127':
 		client = (my_addr, client_input[1])
 
 	uplink[client] = 0
 	
 	costs[client] = dv[me][client][1]
-	
+	'''
 	dv[me][client] = [("DOWN", 0), MAX_COST]
 	dv[client][me] = [("DOWN", 0), MAX_COST]
-	
-
+	'''
+	dv[me][client][1] = MAX_COST
+	try:
+		dv[client][me][1] = MAX_COST
+	except:
+		if DEBUG:
+			print "dont have the DV for " + str(client) + " yet."
 	## first, the dv is dead to me
 	## any current path that relies on the path must be labeled down as well
 	if DEBUG2:
@@ -203,13 +223,17 @@ def linkdown(client_input):  ## also used for timeout event
 
 	kill_link(client)
 	
-	broadcast()
+	for i in range (5):
+		broadcast()
+		sleep(0.2)
+
+
 
 def linkup(client_input):
 	
 	client = client_input
 	
-	if client[0] == 'localhost' or client[0] == '127.0.0.1':
+	if client[0] == 'localhost' or client[0][:3] == '127':
 		client = (my_addr, client_input[1])
 	
 	uplink[client] = 1
@@ -217,17 +241,27 @@ def linkup(client_input):
 	dv[client][me] = [me, costs[client]]
 
 	update_dv()
-	broadcast()
+	for i in range (5):
+		broadcast()
+		sleep(0.2)
+
 
 
 def handle_incoming_message(packet):
 
 
-	sender = packet[1]
+	if packet[1][0][:3] == '127':
+		sender = (my_addr, packet[1][1])
+	else:
+		sender = packet[1]
+
 	if packet[0] == 'DOWN':
 		costs[sender] = dv[me][sender][1]
 		dv[me][sender][1] = MAX_COST
-		dv[sender][me][1] = MAX_COST
+		try:
+			dv[sender][me][1] = MAX_COST
+		except:
+			pass
 		uplink[sender] = 0
 		update_dv()
 		broadcast()
@@ -245,6 +279,7 @@ def handle_incoming_message(packet):
 			for dest, path in dv[sender].iteritems():
 				if dest not in dv[me].keys():
 					dv[me][dest] = [("UNKNOWN", 0), MAX_COST]
+					changed = 1
 
 			costs[sender] = dv[sender][me][1] ## original cost
 			dv[me][sender] = [sender,  costs[sender]]
@@ -252,7 +287,8 @@ def handle_incoming_message(packet):
 			## make sure we have a (fresher) start
 
 			if update_dv():
-				broadcast()
+				changed = 1
+
 
 		else:## we know this dude... reuse old cost, you say?
 			dv[sender] = new_dv
@@ -266,10 +302,20 @@ def handle_incoming_message(packet):
 			uplink[sender] = 1
 
 			if update_dv():
-				broadcast()
+				changed = 1
 
 		if changed:
 			broadcast()
+		else:
+			if DEBUG:
+				print "no changes to DV in this run"
+
+def close():
+	for neighbor, vector in dv.iteritems():
+		if neighbor != me:
+			kill_link(neighbor)
+	sys.exit()
+
 
 
 def handle_keyboard_message(message):
@@ -282,6 +328,8 @@ def handle_keyboard_message(message):
 		linkup((arg[1], int(arg[2])))
 	elif arg[0].upper() == 'BROADCAST':
 		broadcast()
+	elif arg[0].upper() == 'CLOSE':
+		close()
 	else:
 		print "Syntax error. Refer to assignment for correct syntax."
 		pass
@@ -299,10 +347,10 @@ def client_parser(argv):
 	i = 0;
 
 	while i < length-2: ## i = 0, length = 6, length-2 = 4, i = i+3
-		if argv[i] == 'localhost' or argv[i] == '127.0.0.1':
-			addr = socket.gethostbyname(socket.gethostname())
+		if argv[i] == 'localhost' or argv[i][:3] == '127':
+			addr = my_addr
 			'''IMPORTANT
-			ANYTHING LOCAL (127.0.0.1, localhost) is converted to actual IP address to ensure consistency
+			ANYTHING LOCAL (127.x.x.x, localhost) is converted to actual IP address to ensure consistency
 			'''
 		else:
 			addr = argv[i]
@@ -334,40 +382,44 @@ if __name__ == "__main__":
 
 	broadcast()
 	last_broadcast = time()
+	try:
+		while True:
 
-	while True:
+			pipe_list = [sys.stdin, sock]
+			readable = select.select(pipe_list, [], [], 0.1)[0]
+			if not readable:
+				for neighbor, vector in dv.iteritems():
 
-		pipe_list = [sys.stdin, sock]
-		readable = select.select(pipe_list, [], [], 0)[0]
-		if not readable:
-			for neighbor, vector in dv.iteritems():
-
-				if uplink[neighbor] and neighbor is not me:
-					if time()- last_contact[neighbor] > my_timeout*3:
-						if DEBUG:
-							"#######" + str(neighbor) + "has timed out."
-						linkdown(neighbor)
-			
-			if time() - last_broadcast > my_timeout:
+					if uplink[neighbor] and neighbor is not me:
+						if time()- last_contact[neighbor] > my_timeout*3:
+							if DEBUG:
+								print "#######" + str(neighbor) + "has timed out."
+							linkdown(neighbor)
 				
-				if DEBUG:
-					print "I am starting to broadcast to the neighbors..."
-				broadcast()
-				last_broadcast = time() ## because currently braodcast() does not update properly
-
-		else:
-			for a_socket in readable:
-				if a_socket == sock:
+				if time() - last_broadcast > my_timeout:
+					
 					if DEBUG:
-						print "see what the packet is... could be nothing"
-					handle_incoming_message(a_socket.recvfrom(BUFFER_SIZE))
-				elif a_socket == sys.stdin:
-					message = sys.stdin.readline()
-					handle_keyboard_message(message)
-				else:
-					print "DONT KNOW WHY IM HERE"
-					pass
+						print "I am starting to broadcast to the neighbors..."
+					broadcast()
+					last_broadcast = time() ## because currently braodcast() does not update properly
 
+			else:
+				for a_socket in readable:
+					if a_socket == sock:
+						if DEBUG:
+							print "see what the packet is... could be nothing"
+						handle_incoming_message(a_socket.recvfrom(BUFFER_SIZE))
+					elif a_socket == sys.stdin:
+						message = sys.stdin.readline()
+						handle_keyboard_message(message)
+					else:
+						print "DONT KNOW WHY IM HERE"
+						pass
+	except KeyboardInterrupt:
+		close()
+		sys.exit()
+
+	
 			
 
 
